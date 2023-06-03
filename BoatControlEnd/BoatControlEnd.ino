@@ -8,8 +8,10 @@
  * Original version by Bo
  * Servo tiller position indicator version by Mark (MC)
  * 
- * Last modified 28/03/2023 (MC)
+ * Last modified 03/06/2023 (MC)
  * Tuned potentiometer positioning to centre swing for left & right handed operation
+ * Left hand range very poor
+ * Modified DEBUG PRINT statements & serial so that serial is fully disabled if DEBUG=0
  * 
 */
 
@@ -38,8 +40,8 @@
 #define ARC_POWER_PIN   A0  // Power for LED Arc
 
 // JoyButton Remote Control of Hydaulic Ram
-#define Button_Pin0     0   // Centre
-#define Button_Pin1     1   // GotoPot
+#define Button_Pin0     0   // Centre (Midship)
+#define Button_Pin1     1   // GotoPot (Pot controlled tiller)
 #define Button_Pin2     2   // Out / PCINT3
 #define Button_Pin3     3   // In  / PCINT4
 //#define Button_Pin4   4   // Clutch  ** for later
@@ -96,7 +98,7 @@
 // ***** Debugging switches and macros *****
 
 #define OLED 0                  // turn the OLED display on or off - also runs faster with no display page refresh
-#define DEBUG 1                 // Switch debug output on and off by 1 or 0
+#define DEBUG 0                 // Switch debug output on and off by 1 or 0
 
 #if DEBUG
 #define PRINTS(s)       { Serial.print(F(s)); }
@@ -108,7 +110,7 @@
 #else
 #define PRINTS(s)
 #define PRINTSLN(s)
-#define PRINTS(s1,s2)
+#define PRINTSS(s1,s2)
 #define PRINTI(s,v)
 #define PRINT(s,v,dec)
 #define PRINTX(s,v)
@@ -233,6 +235,7 @@ float BatteryVoltage = 0.0;       // Battery Voltage
 boolean BatteryCritical = false;
 boolean BatteryWarning = false;
 boolean NearToSleep = false;
+boolean GoingToSleep = false;
 uint8_t pulseLED = 0;             // Number of times to pulse the debug LED every 5s
 
 // *****************************************
@@ -316,6 +319,8 @@ void flashLED() {
     pulseLED = pulseLED + 4;            // Add 4 flashes if battery is critically under-voltage
   if (NearToSleep)                      // Check time to sleep
     pulseLED = pulseLED + 8;            // Add 8 flashes if near to sleep-time
+  if (GoingToSleep)                     // Check time to sleep
+    pulseLED = pulseLED + 16;           // Add 16 flashes if going to sleep
     
   for (int i=0; i < pulseLED; i++){
     digitalWrite(DBGLED_PIN, HIGH);     // LED On
@@ -472,8 +477,10 @@ void setup(void) {
   
 // Pin Change Interrupt (example for D3 / D4)  << ********************
   // want pin D3 / pin 2 | D4 / pin 3, pin D00, pin D01
-  //PCMSK2 |= bit (PCINT16); // Pin D00 (Can't use as an interrupt until we kill the serial...)
-  //PCMSK2 |= bit (PCINT17); // Pin D01 (Can't use as an interrupt until we kill the serial...)
+  if (!DEBUG){
+    PCMSK2 |= bit (PCINT16); // Pin D00 (Can't use as an interrupt until we kill the serial...)
+    PCMSK2 |= bit (PCINT17); // Pin D01 (Can't use as an interrupt until we kill the serial...)
+  }
   PCMSK2 |= bit (PCINT18); // Pin D02
   PCMSK2 |= bit (PCINT19); // Pin D03
   PCIFR   |= bit (PCIF2);    // clear any outstanding interrupts
@@ -619,7 +626,7 @@ void DoRadioRx(void) {
       if (SupervisorMode == 1) SuperAck = 1;
       
 
-      //Serial Print the values of joystick Debug on Com 5
+      //Serial Print the values of joystick
      /* PRINTX("got request from : 0x", from);
       * PRINTS("\n");
       */
@@ -916,7 +923,11 @@ void loop(void) {            // ********* Main Loop - The Receiver Code
     NearToSleep = false;
 
   // Check if it's time to go to sleep
-  if (TimeNow > (TimeLast + TSleep))      // greater than last time joystick activated + Delay TSleep
+  if (TimeNow > (TimeLast + TSleep)) {    // greater than last time joystick activated + Delay TSleep
+    GoingToSleep = true;
     DoSleep();
+  }
+  else
+    GoingToSleep = false;
 
 } // End Loop
