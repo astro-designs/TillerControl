@@ -13,6 +13,9 @@
  * Left hand range very poor
  * Modified DEBUG PRINT statements & serial so that serial is fully disabled if DEBUG=0
  * 
+ * 22/07/2023 (MC)
+ * Added separate constant control minimum detectable Pot position change, setting it to 2 (was 5)
+ * Reduced MinTillerChange to 4
 */
 
 // Who built the firmware last?
@@ -72,8 +75,8 @@
 
 #define Ref_5V          5.0     // ADC reference voltage
 #define DRIVESERVO      1       // Enable servo driver
-#define Bat_UV          4.8     // Battery under-voltage threshold (Warning)
-#define Bat_Critical    4.4     // Battery under-voltage threshold (Sleep)
+#define Bat_UV          5.9     // Battery under-voltage threshold (Warning) Assumes 4 x 1.5V cells
+#define Bat_Critical    5.5     // Battery under-voltage threshold (Sleep)
 #define LED_flash_time  5000    // LED flash cycle time (5s)
 #define SERVO_LLIM      30      // Left-turn limit of servo
 #define SERVO_RLIM      130     // Left-turn limit of servo
@@ -84,6 +87,10 @@
 #define TSleep          40000   // 40 seconds inactivity before going to sleep
 #define TTillerTimeout  15000   // 15 seconds after Tiller changes position, the insructions to move the tiller will stop
 
+#define TillerPot_RCCW  2       // Pot output when RH max CCW
+#define TillerPot_RCW   390     // Pot output when RH max CW
+#define TillerPot_LCCW  728     // Pot output when RH max CCW
+#define TillerPot_LCW   1009    // Pot output when RH max CW
 #define TillerPos_LLIM  0       // Left-end (CCW) Tiller position limit (not currently used)
 #define TillerPos_RLIM  127     // Right-end (CW) Tiller position limit (not currently used)
 #define PotGain         1.0     // TillerPot Gain (Default = 1.0)
@@ -91,8 +98,11 @@
 #define TillerPotMin    0       // ModifiedPotValue output when midway between left-handed range and right-handed range (pointing out of the end of the box)
 #define TillerPotCentre 520     // ModifiedPotValue output when midway between left-handed range and right-handed range (pointing out of the end of the box)
 #define TillerPotMax    1023    // ModifiedPotValue output when midway between left-handed range and right-handed range (pointing out of the end of the box)
-
-#define MinTillerChange 5       // Controls how sensitive the Tiller position sensor is - 5 is good, < 5 is too small (Tiller can oscillates), > 7 is too big (larger positional error)
+#define TillerPosCentre 70      // Output of tiller position from tiller-end when tiller is mid-ship.
+#define TillerPosMin    7       // Precautionary limit on Tiller position to prevent Ram being driven to limit
+#define TillerPosMax    120     // Precautionary limit on Tiller position to prevent Ram being driven to limit
+#define MinTillerChange 4       // Controls how sensitive the Tiller position sensor is - 5 is good, < 5 is too small (Tiller can oscillates), > 7 is too big (larger positional error)
+#define MinPotChange    2       // Controls how sensitive the Pot is to change
 
 // *****************************************
 // ***** Debugging switches and macros *****
@@ -293,7 +303,7 @@ void flashLED() {
   PRINTI("\n PotTillerPos:        ", PotTillerPos);
   PRINTI("\n OldPotTillerPos:     ", OldPotTillerPos);
   PRINTI("\n TillerPos:           ", TillerPos); 
-//PRINTI("\n buf[3]:              ", buf[3]); 
+  PRINTI("\n buf[3]:              ", buf[3]); 
   PRINTI("\n Radio Status:        ", RX_state); 
   PRINTI("\n Time Now:            ", TimeNow);
   PRINTI("\n Time Last:           ", TimeLast);
@@ -341,56 +351,90 @@ void readJoystick(uint8_t motor[3]){
     ModifiedPotValue = 0;
 
   // Check for left-handed or right-handed configuration based on positioning of the tiller pot...
-  if (ModifiedPotValue >= TillerPotCentre) // Handset is probably in left-handed configuration
-    //PotTillerPos = map(ModifiedPotValue, TillerPotCentre, TillerPotMax, 0, MaxDisplayWidth-1) + PotOffsetL;    
-    //PotTillerPos = MaxDisplayWidth - (map(ModifiedPotValue, TillerPotCentre, TillerPotMax, 0, MaxDisplayWidth-1) + PotOffsetL);
-    PotTillerPos = MaxDisplayWidth - (map(ModifiedPotValue, TillerPotCentre, TillerPotMax, 0, MaxDisplayWidth-1));    // Works but Pot range is very limited and centre isn't centre. 
-  else                         // Handset is probably in right-handed configuration
-    //PotTillerPos = map(ModifiedPotValue, TillerPotMin, TillerPotCentre, 0, MaxDisplayWidth-1) + PotOffsetR;    
-    //PotTillerPos = MaxDisplayWidth - (map(ModifiedPotValue, TillerPotMin, TillerPotCentre, 0, MaxDisplayWidth-1) + PotOffsetR);    
-    PotTillerPos = MaxDisplayWidth - (map(ModifiedPotValue, TillerPotMin, TillerPotCentre, 0, MaxDisplayWidth-1));
+  if (ModifiedPotValue >= TillerPotCentre) { // Handset is probably in left-handed configuration
+    // Apply LH Limits
+    if (ModifiedPotValue < TillerPot_LCCW)
+      ModifiedPotValue = TillerPot_LCCW;
+    if (ModifiedPotValue > TillerPot_LCW)
+      ModifiedPotValue = TillerPot_LCW;
+    
+    // Apply LH Mapping
+    PotTillerPos = MaxDisplayWidth - (map(ModifiedPotValue, TillerPot_LCCW, TillerPot_LCW, 0, MaxDisplayWidth-1));    // Works but Pot range is very limited and centre isn't centre. 
+  }
+  else                                     { // Handset is probably in right-handed configuration
+    // Apply RH Limits
+    if (ModifiedPotValue < TillerPot_RCCW)
+      ModifiedPotValue = TillerPot_RCCW;
+    if (ModifiedPotValue > TillerPot_RCW)
+      ModifiedPotValue = TillerPot_RCW;
+    
+    // Apply RH Mapping
+    PotTillerPos = MaxDisplayWidth - (map(ModifiedPotValue, TillerPot_RCCW, TillerPot_RCW, 0, MaxDisplayWidth-1));
+  }
   
   // Check for Tiller Pot change...
-  if (abs(PotTillerPos - OldPotTillerPos) > MinTillerChange - 1) {
+  if (abs(PotTillerPos - OldPotTillerPos) > MinPotChange) {
     OldPotTillerPos = PotTillerPos;
     TimeTillerInactive = TimeNow + TTillerTimeout; // Reset Tiller Timeout
   }
       
-  if      (!digitalRead(Button_Pin2)) { // Button or Joystick controls the Tiller
-    //PRINTS("\n Button_Pin2!");
-    motor[0] = 1;
-    motor[1] = 0;
-  }
-  else if (!digitalRead(Button_Pin3)) { // Button or Joystick controls the Tiller
-    //PRINTS("\n Button_Pin3!");
-    motor[0] = 0;
-    motor[1] = 1;
-  }
-  else if (!digitalRead(Button_Pin1)) { // Goto Pot position
+  if (!digitalRead(Button_Pin1)) { // Highest priority control - Goto Pot position
     //PRINTS("\n Button_Pin1!");
     if (RX_state == 3 and PotTillerPos > TillerPos + MinTillerChange and TimeNow < TimeTillerInactive) // Pot controls the Tiller
       motor[0] = 1;
     if (RX_state == 3 and PotTillerPos < TillerPos - MinTillerChange and TimeNow < TimeTillerInactive) // Pot controls the Tiller
       motor[1] = 1;
+
+    // Reset standby timeout
+    TimeLast = millis(); //set Timelast to current millis()
   }
   else if (!digitalRead(Button_Pin0)) { // Goto MidShip position
      //PRINTS("\n Button_Pin0!");
-     if (TillerPos < ((MaxDisplayWidth/2)-4)) {
+     if (TillerPos < (TillerPosCentre-3)) {
        motor[0] = 1;
        motor[1] = 0;
      }
-     else if (TillerPos > ((MaxDisplayWidth/2)+4)) {
+     else if (TillerPos > (TillerPosCentre+3)) {
        motor[0] = 0;
        motor[1] = 1;
      }    
+
+    // Reset standby timeout
+    TimeLast = millis(); //set Timelast to current millis()
+  }
+  else if      (!digitalRead(Button_Pin2)) { // Button or Joystick controls the Tiller
+    //PRINTS("\n Button_Pin2!");
+    motor[0] = 1;
+    motor[1] = 0;
+
+    // Reset standby timeout
+    TimeLast = millis(); //set Timelast to current millis()
+  }
+  else if (!digitalRead(Button_Pin3)) { // Button or Joystick controls the Tiller
+    //PRINTS("\n Button_Pin3!");
+    motor[0] = 0;
+    motor[1] = 1;
+
+    // Reset standby timeout
+    TimeLast = millis(); //set Timelast to current millis()
   }
   
-  if (motor[0] || motor[1])
-  {
-    TimeLast = millis(); //set Timelast to current millis()
+//  if (motor[0] || motor[1])
+//  {
+//    TimeLast = millis(); //set Timelast to current millis()
+//  }
+
+  // Check precautionary limits
+  // Override motor controls, disabling motor in each direction if the tiller position sensor is nearing limits
+  if (TillerPos <= TillerPosMin) {
+    motor[1] = 0;
+  }
+  if (TillerPos >= TillerPosMax) {
+    motor[0] = 0;
   }
 
   // Unlock the clutch if there is any activity - (locks when going to sleep)
+  // (MC) Not sure this doesn anything, I think the clutch control is entirely handled in the Tiller-end controller
   motor[2] =  1; // set Clutch
 }
 
@@ -427,6 +471,86 @@ void ledArcWrite(uint32_t color, int posn) {
     
  
 }// End ledArcWrite
+
+void setup_radio(void){
+
+  if (digitalRead(Switch_Pin2)== 0 ) // supervisor Switch on
+  {
+    // Sets the radio driver to NRF24 and the server address to 3
+    // RHReliableDatagram RadioManager(RadioDriver, SUPER_ADDRESS);   
+    // SUPER_ADDRESS
+    RadioManager.setThisAddress(SUPER_ADDRESS);
+       
+    SupervisorMode = 1;
+    PRINTSLN("supervisor Mode"); 
+  }
+  else {
+    // Sets the radio driver to NRF24 and the server address to 2
+    // RHReliableDatagram RadioManager(RadioDriver, SERVER_ADDRESS); 
+    RadioManager.setThisAddress(SERVER_ADDRESS); 
+    SupervisorMode = 0;
+    PRINTSLN("Normal Mode");
+  }
+
+  // Initialize RadioManager with defaults - 2.402 GHz (channel 2), 2Mbps, 0dBm
+  if (!RadioManager.init()) {
+    PRINTSLN("init failed");
+    RX_state = 0;
+  }
+    
+  else {
+    PRINTSLN("Radio initialized OK");
+    //if (SupervisorMode == 1 ) DoRadioTx(); // let Tiller know we are supervisor  ************<<<
+    RX_state = 1;
+  }
+
+  if (digitalRead(Switch_Pin1)== 0 ) { // Chan Hi Switch on
+    RadioChanNo = 2;
+  }
+  else {
+    RadioChanNo = 0;
+  }
+
+  if (digitalRead(Switch_Pin0)== 0 ) // Chan Lo Switch on
+    RadioChanNo = RadioChanNo + 1;  // results in Chan 0 - 3
+    RadioDriver.setChannel(120 + RadioChanNo); // Channel 120 - 123
+    PRINTI(" Radio Channel ", RadioChanNo);
+    PRINTS("\n");
+    //RadioDriver.setChannel(124);
+
+    if (!RadioDriver.setRF(RH_NRF24::DataRate2Mbps, RH_NRF24::TransmitPower0dBm)) { //12dBm
+      PRINTS("\n setRF failed"); 
+      RX_state = 0;
+    }
+    else {
+      PRINTS("\n Radio initialized OK");
+      RX_state = 1;
+    }
+
+    // Defaults after init are 2.402 GHz (channel 2), 2Mbps, 0dBm
+    /**********************************  Radio options - eg: set different chan, etc **************
+    if (!RadioDriver.setChannel(1))
+      PRINTSLN("setChannel failed");
+    **************************/
+
+    /**********************************  set different Data Rate **************   
+    if (!RadioDriver.setRF(RH_NRF24::DataRate2Mbps, RH_NRF24::TransmitPower0dBm))
+      PRINTSLN("setRF failed");  
+    **************************/
+
+    /*********************************
+    DataRate { DataRate1Mbps = 0, DataRate2Mbps, DataRate250kbps }
+    TransmitPower {
+    TransmitPowerm18dBm = 0, TransmitPowerm12dBm, TransmitPowerm6dBm, TransmitPower0dBm,
+    RFM73TransmitPowerm10dBm = 0, RFM73TransmitPowerm5dBm, RFM73TransmitPowerm0dBm, RFM73TransmitPower5dBm
+    *******************/
+
+    /**************** 
+    if  (!RadioDriver.setTxPower(14))
+      PRINTS("setRF failed \n");
+    else  PRINTS("Radio setRF OK \n");
+    *******************/  
+}
 
 // Arduino setup function - runs automatically at power-up
 void setup(void) {
@@ -465,17 +589,18 @@ void setup(void) {
 
   // ************************
 
+
   // Attach the servo:
   myservo.attach(SERVO_PIN);
 
-  
+
+  // NeoPixel Strip...
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
   strip.show();            // Turn OFF all pixels ASAP
   strip.setBrightness(60); // Set BRIGHTNESS to about 1/5 (was=30) (max = 255)
 
-
   
-// Pin Change Interrupt (example for D3 / D4)  << ********************
+  // Pin Change Interrupt (example for D3 / D4)  << ********************
   // want pin D3 / pin 2 | D4 / pin 3, pin D00, pin D01
   if (!DEBUG){
     PCMSK2 |= bit (PCINT16); // Pin D00 (Can't use as an interrupt until we kill the serial...)
@@ -487,101 +612,27 @@ void setup(void) {
   PCICR   |= bit (PCIE2);    // enable pin change interrupts 
   
   
-#if OLED //******************************************* OLED **********************************************
-  u8g2.begin();
-  //u8g2_prepare();
+  #if OLED //******************************************* OLED **********************************************
+    u8g2.begin();
+    //u8g2_prepare();
   
-  MaxDisplayWidth = u8g2.getDisplayWidth();
-  MaxDisplayHeight = u8g2.getDisplayHeight();
-#endif //******************************************* OLED **********************************************
+    MaxDisplayWidth = u8g2.getDisplayWidth();
+    MaxDisplayHeight = u8g2.getDisplayHeight();
+  #endif //******************************************* OLED **********************************************
 
 
-
-   // PRINTSLN(" BoatContRxNRF24_Sleep_Arc4RdGnMidShipSuperChanNoTX");
-   // Set motor commands to off, Clutch off
+  // PRINTSLN(" BoatContRxNRF24_Sleep_Arc4RdGnMidShipSuperChanNoTX");
+  // Set motor commands to off, Clutch off
   motorcontrol[0] = 0; // ram out go Left Tiller Right
   motorcontrol[1] = 0; // ram in  go Right Tiller Left
   motorcontrol[2] = 1; // Clutch set engage initially
 
-   TillerPos = MaxDisplayWidth/2;
+  TillerPos = MaxDisplayWidth/2;
 
-// ******************** Radio Setup *********************
-
-if (digitalRead(Switch_Pin2)== 0 ) // supervisor Switch on
-{
-  // Sets the radio driver to NRF24 and the server address to 3
-   // RHReliableDatagram RadioManager(RadioDriver, SUPER_ADDRESS);   
-   // SUPER_ADDRESS
-    RadioManager.setThisAddress(SUPER_ADDRESS);
-       
-   SupervisorMode = 1;
-   PRINTSLN("supervisor Mode"); 
-}
-else {
-  // Sets the radio driver to NRF24 and the server address to 2
-  // RHReliableDatagram RadioManager(RadioDriver, SERVER_ADDRESS); 
-  RadioManager.setThisAddress(SERVER_ADDRESS); 
-  SupervisorMode = 0;
-  PRINTSLN("Normal Mode");
-  }
-
-// Initialize RadioManager with defaults - 2.402 GHz (channel 2), 2Mbps, 0dBm
-if (!RadioManager.init()) {
-  PRINTSLN("init failed");
-  RX_state = 0;
-  }
-    
-else {
-  PRINTSLN("Radio initialized OK");
-  //if (SupervisorMode == 1 ) DoRadioTx(); // let Tiller know we are supervisor  ************<<<
-  RX_state = 1;
-  }
-
-if (digitalRead(Switch_Pin1)== 0 ) { // Chan Hi Switch on
-  RadioChanNo = 2;
-}
-else {
-  RadioChanNo = 0;
-}
-
-if (digitalRead(Switch_Pin0)== 0 ) // Chan Lo Switch on
-  RadioChanNo = RadioChanNo + 1;  // results in Chan 0 - 3
-   RadioDriver.setChannel(120 + RadioChanNo); // Channel 120 - 123
-   PRINTI(" Radio Channel ", RadioChanNo);
-   PRINTS("\n");
-   //RadioDriver.setChannel(124);
-
-   if (!RadioDriver.setRF(RH_NRF24::DataRate2Mbps, RH_NRF24::TransmitPower0dBm))  //12dBm
-        {PRINTS("\n setRF failed"); 
-      RX_state = 0;}
-  else  {PRINTS("\n Radio initialized OK");
-    RX_state = 1;
-    }
-
-    // Defaults after init are 2.402 GHz (channel 2), 2Mbps, 0dBm
- /**********************************  Radio options - eg: set different chan, etc **************
-  if (!RadioDriver.setChannel(1))
-    PRINTSLN("setChannel failed");
-**************************/
-
- /**********************************  set different Data Rate **************   
-  if (!RadioDriver.setRF(RH_NRF24::DataRate2Mbps, RH_NRF24::TransmitPower0dBm))
-    PRINTSLN("setRF failed");  
-    **************************/
-/*********************************
-   DataRate { DataRate1Mbps = 0, DataRate2Mbps, DataRate250kbps }
-    TransmitPower {
-  TransmitPowerm18dBm = 0, TransmitPowerm12dBm, TransmitPowerm6dBm, TransmitPower0dBm,
-  RFM73TransmitPowerm10dBm = 0, RFM73TransmitPowerm5dBm, RFM73TransmitPowerm0dBm, RFM73TransmitPower5dBm
-*******************/
-
+  // ******************** Radio Setup *********************
+  setup_radio();
   
-/**************** 
-   if  (!RadioDriver.setTxPower(14))
-    PRINTS("setRF failed \n");
-   else  PRINTS("Radio setRF OK \n");
-   *******************/
-}// End setup
+} // End setup
 
 void DoRadioTx(void) {   // send to Tiller Supervisor Status  -- Not Used Now !!!
 
@@ -743,7 +794,7 @@ void DoSleep(void) {
     PRINTSLN("I'm awake!");
 
     // cancel sleep as a precaution
- // sleep_disable();
+    // sleep_disable();
   
     // Re-enable ADC if it was previously running
     ADCSRA = prevADCSRA;
@@ -751,14 +802,19 @@ void DoSleep(void) {
     pinMode(Switch_Pin1,INPUT_PULLUP);//set the Switch 1 as an input 6 High enable internal pullup 
     pinMode(Switch_Pin2,INPUT_PULLUP);//set the Switch 2 as an input 7 High enable internal pullup 
     if (digitalRead(Switch_Pin2)==0 ) // supervisor Switch on
-     {
+    {
       SupervisorMode = 1;
-     }
-   // if (SupervisorMode == 1 ) DoRadioTx(); // let Tiller know we are supervisor to reestablish Supervisor
+    }
+    // if (SupervisorMode == 1 ) DoRadioTx(); // let Tiller know we are supervisor to reestablish Supervisor
 
     digitalWrite(ARC_POWER_PIN, HIGH);  // turn ARC LED strip back on
     TimeNow = millis();  // to cancel sleep till next delay
     TimeLast = TimeNow;
+
+    // Radio was powered down so it needs to be setup again...
+    // (Applies to MC customised Arduino board only)
+    setup_radio();
+
   } // End DoSleep
 
 
