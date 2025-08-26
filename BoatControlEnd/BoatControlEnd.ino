@@ -53,7 +53,7 @@
 #define Switch_Pin0     5   // Dil Switch 0 on Dig IP 5 Channel Low  byte
 #define Switch_Pin1     6   // Dil Switch 1 on Dig IP 6 Channel High byte
 #define Switch_Pin2     7   // Dil Switch 2 on Dig IP 7 Supervisor Mode
-
+#define Force_Channel   2   // Set to 0-3 to force radio channel, set to > 7 to work from Switch 1, 2 & 3
 #define DBGLED_PIN      A3  // Debug Led for checking sleep function, battery voltage & radio status (Was 9)
 
 // Tiller Control Pot
@@ -87,14 +87,17 @@
 #define TSleep          40000   // 40 seconds inactivity before going to sleep
 #define TTillerTimeout  15000   // 15 seconds after Tiller changes position, the insructions to move the tiller will stop
 
+#define TillerPotMode   3       // Pot mode (0 = auto L/R, 1 = left-handed, 2 = right-handed, 3 = basic)
+#define TillerPot_CCW   5       // Pot output when max CCW
+#define TillerPot_CW    1020    // Pot output when max CW
 #define TillerPot_RCCW  2       // Pot output when RH max CCW
 #define TillerPot_RCW   390     // Pot output when RH max CW
-#define TillerPot_LCCW  728     // Pot output when RH max CCW
-#define TillerPot_LCW   1009    // Pot output when RH max CW
+#define TillerPot_LCCW  728     // Pot output when LH max CCW
+#define TillerPot_LCW   1009    // Pot output when LH max CW
 #define TillerPos_LLIM  0       // Left-end (CCW) Tiller position limit (not currently used)
 #define TillerPos_RLIM  127     // Right-end (CW) Tiller position limit (not currently used)
 #define PotGain         1.0     // TillerPot Gain (Default = 1.0)
-#define PotOffset       0       // TillerPot Offset (Default = 0)
+#define PotOffset       -128    // TillerPot Offset (Default = 0) (16 for basic pot mode)
 #define TillerPotMin    0       // ModifiedPotValue output when midway between left-handed range and right-handed range (pointing out of the end of the box)
 #define TillerPotCentre 520     // ModifiedPotValue output when midway between left-handed range and right-handed range (pointing out of the end of the box)
 #define TillerPotMax    1023    // ModifiedPotValue output when midway between left-handed range and right-handed range (pointing out of the end of the box)
@@ -108,7 +111,7 @@
 // ***** Debugging switches and macros *****
 
 #define OLED 0                  // turn the OLED display on or off - also runs faster with no display page refresh
-#define DEBUG 0                 // Switch debug output on and off by 1 or 0
+#define DEBUG 1                 // Switch debug output on and off by 1 or 0
 
 #if DEBUG
 #define PRINTS(s)       { Serial.print(F(s)); }
@@ -308,10 +311,15 @@ void flashLED() {
   PRINTI("\n Time Now:            ", TimeNow);
   PRINTI("\n Time Last:           ", TimeLast);
   PRINTI("\n Time TillerInactive: ", TimeTillerInactive);
-  if (ModifiedPotValue >= TillerPotCentre) {  // Handset is probably in left-handed configuration
-    PRINTS("\n Left-handed!"); }
-  else {                          // Handset is probably in left-handed configuration
-    PRINTS("\n Right-handed!"); }
+  if (TillerPotMode == 0) {
+    if (ModifiedPotValue >= TillerPotCentre) {  // Handset is probably in left-handed configuration
+      PRINTS("\n Left-handed!"); }
+    else {                                      // Handset is probably in left-handed configuration
+      PRINTS("\n Right-handed!"); }
+  }
+  else {                                        // Handset is in basic Pot mode - no L/R option
+    PRINTS("\n Basic Pot Mode");
+  }
   PRINTS("\n ********************************");
   
 
@@ -351,25 +359,32 @@ void readJoystick(uint8_t motor[3]){
     ModifiedPotValue = 0;
 
   // Check for left-handed or right-handed configuration based on positioning of the tiller pot...
-  if (ModifiedPotValue >= TillerPotCentre) { // Handset is probably in left-handed configuration
-    // Apply LH Limits
-    if (ModifiedPotValue < TillerPot_LCCW)
-      ModifiedPotValue = TillerPot_LCCW;
-    if (ModifiedPotValue > TillerPot_LCW)
-      ModifiedPotValue = TillerPot_LCW;
+  if (TillerPotMode == 0) {
+    if (ModifiedPotValue >= TillerPotCentre) { // Handset is probably in left-handed configuration
+      // Apply LH Limits
+      if (ModifiedPotValue < TillerPot_LCCW)
+        ModifiedPotValue = TillerPot_LCCW;
+      if (ModifiedPotValue > TillerPot_LCW)
+        ModifiedPotValue = TillerPot_LCW;
     
-    // Apply LH Mapping
-    PotTillerPos = MaxDisplayWidth - (map(ModifiedPotValue, TillerPot_LCCW, TillerPot_LCW, 0, MaxDisplayWidth-1));    // Works but Pot range is very limited and centre isn't centre. 
+      // Apply LH Mapping
+      PotTillerPos = MaxDisplayWidth - (map(ModifiedPotValue, TillerPot_LCCW, TillerPot_LCW, 0, MaxDisplayWidth-1));    // Works but Pot range is very limited and centre isn't centre. 
+    }
+    else                                     { // Handset is probably in right-handed configuration
+      // Apply RH Limits
+      if (ModifiedPotValue < TillerPot_RCCW)
+        ModifiedPotValue = TillerPot_RCCW;
+      if (ModifiedPotValue > TillerPot_RCW)
+        ModifiedPotValue = TillerPot_RCW;
+    
+      // Apply RH Mapping
+      PotTillerPos = MaxDisplayWidth - (map(ModifiedPotValue, TillerPot_RCCW, TillerPot_RCW, 0, MaxDisplayWidth-1));
+    }
   }
-  else                                     { // Handset is probably in right-handed configuration
-    // Apply RH Limits
-    if (ModifiedPotValue < TillerPot_RCCW)
-      ModifiedPotValue = TillerPot_RCCW;
-    if (ModifiedPotValue > TillerPot_RCW)
-      ModifiedPotValue = TillerPot_RCW;
-    
-    // Apply RH Mapping
-    PotTillerPos = MaxDisplayWidth - (map(ModifiedPotValue, TillerPot_RCCW, TillerPot_RCW, 0, MaxDisplayWidth-1));
+
+  else { // Assume basic mode (3)
+    // Apply basic Mapping
+    PotTillerPos = MaxDisplayWidth - (map(ModifiedPotValue, TillerPot_CCW, TillerPot_CW, 0, MaxDisplayWidth-1));    // 
   }
   
   // Check for Tiller Pot change...
@@ -474,7 +489,7 @@ void ledArcWrite(uint32_t color, int posn) {
 
 void setup_radio(void){
 
-  if (digitalRead(Switch_Pin2)== 0 ) // supervisor Switch on
+  if (digitalRead(Switch_Pin2)== 0 and Force_Channel > 7) // supervisor Switch on
   {
     // Sets the radio driver to NRF24 and the server address to 3
     // RHReliableDatagram RadioManager(RadioDriver, SUPER_ADDRESS);   
@@ -504,52 +519,57 @@ void setup_radio(void){
     RX_state = 1;
   }
 
-  if (digitalRead(Switch_Pin1)== 0 ) { // Chan Hi Switch on
+  if (digitalRead(Switch_Pin1)== 0 and Force_Channel > 7) { // Chan Hi Switch on
     RadioChanNo = 2;
   }
   else {
     RadioChanNo = 0;
   }
 
-  if (digitalRead(Switch_Pin0)== 0 ) // Chan Lo Switch on
+  if (digitalRead(Switch_Pin0)== 0 and Force_Channel > 7) // Chan Lo Switch on
     RadioChanNo = RadioChanNo + 1;  // results in Chan 0 - 3
-    RadioDriver.setChannel(120 + RadioChanNo); // Channel 120 - 123
-    PRINTI(" Radio Channel ", RadioChanNo);
-    PRINTS("\n");
-    //RadioDriver.setChannel(124);
 
-    if (!RadioDriver.setRF(RH_NRF24::DataRate2Mbps, RH_NRF24::TransmitPower0dBm)) { //12dBm
-      PRINTS("\n setRF failed"); 
-      RX_state = 0;
-    }
-    else {
-      PRINTS("\n Radio initialized OK");
-      RX_state = 1;
-    }
+  // Option to override Radio Channel using the Force_Channel constant
+  if (Force_Channel <= 7)
+    RadioChanNo = Force_Channel & 3;
+    
+  RadioDriver.setChannel(120 + RadioChanNo); // Channel 120 - 123
+  PRINTI(" Radio Channel ", RadioChanNo);
+  PRINTS("\n");
+  //RadioDriver.setChannel(124);
 
-    // Defaults after init are 2.402 GHz (channel 2), 2Mbps, 0dBm
-    /**********************************  Radio options - eg: set different chan, etc **************
-    if (!RadioDriver.setChannel(1))
-      PRINTSLN("setChannel failed");
-    **************************/
+  if (!RadioDriver.setRF(RH_NRF24::DataRate2Mbps, RH_NRF24::TransmitPowerm6dBm)) { //12dBm
+    PRINTS("\n setRF failed"); 
+    RX_state = 0;
+  }
+  else {
+    PRINTS("\n Radio initialized OK");
+    RX_state = 1;
+  }
 
-    /**********************************  set different Data Rate **************   
-    if (!RadioDriver.setRF(RH_NRF24::DataRate2Mbps, RH_NRF24::TransmitPower0dBm))
-      PRINTSLN("setRF failed");  
-    **************************/
+  // Defaults after init are 2.402 GHz (channel 2), 2Mbps, 0dBm
+  /**********************************  Radio options - eg: set different chan, etc **************
+  if (!RadioDriver.setChannel(1))
+    PRINTSLN("setChannel failed");
+  **************************/
 
-    /*********************************
-    DataRate { DataRate1Mbps = 0, DataRate2Mbps, DataRate250kbps }
-    TransmitPower {
-    TransmitPowerm18dBm = 0, TransmitPowerm12dBm, TransmitPowerm6dBm, TransmitPower0dBm,
-    RFM73TransmitPowerm10dBm = 0, RFM73TransmitPowerm5dBm, RFM73TransmitPowerm0dBm, RFM73TransmitPower5dBm
-    *******************/
+  /**********************************  set different Data Rate **************   
+  if (!RadioDriver.setRF(RH_NRF24::DataRate2Mbps, RH_NRF24::TransmitPower0dBm))
+    PRINTSLN("setRF failed");  
+  **************************/
 
-    /**************** 
-    if  (!RadioDriver.setTxPower(14))
-      PRINTS("setRF failed \n");
-    else  PRINTS("Radio setRF OK \n");
-    *******************/  
+  /*********************************
+  DataRate { DataRate1Mbps = 0, DataRate2Mbps, DataRate250kbps }
+  TransmitPower {
+  TransmitPowerm18dBm = 0, TransmitPowerm12dBm, TransmitPowerm6dBm, TransmitPower0dBm,
+  RFM73TransmitPowerm10dBm = 0, RFM73TransmitPowerm5dBm, RFM73TransmitPowerm0dBm, RFM73TransmitPower5dBm
+  *******************/
+
+  /**************** 
+  if  (!RadioDriver.setTxPower(14))
+    PRINTS("setRF failed \n");
+  else  PRINTS("Radio setRF OK \n");
+  *******************/  
 }
 
 // Arduino setup function - runs automatically at power-up
