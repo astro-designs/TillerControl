@@ -44,3 +44,8 @@ Previous changes include, but are not limited to ('coz I may have missed somethi
 * Reduced Pot deadband (now 2, was 5)
 * Increased sensitivity to Pot change (now 4, was 5)
 
+26/08/2025
+* Changing motor controls to send speed instead of on/off
+* work in progress...
+* Moving NeoPixels pin from pin 4 to pin 9 (Optional, this or Servo)
+* Moving Midship button from pin 1 to pin 4

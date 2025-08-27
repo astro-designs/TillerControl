@@ -11,7 +11,11 @@
  * // Modified to be compatible with Bruce Boats Tiller Controller Driver
  * Halfbridge out1 = { .active = FALSE, .pinIn = 3, .pinInh = 6, .pinIs = A0 };
  * Halfbridge out2 = { .active = FALSE, .pinIn = 9, .pinInh = 5, .pinIs = A1 };
-  
+ * 
+ * 77/08/2025 (MC)
+ * Added option to allow the control-end to adjust the speed of the ram
+ * Modified delays to speed up response
+ * 
 */
 
 /// Connect the nRF24L01 to most Arduino's like this (Caution, Arduino Mega has different pins for SPI, 
@@ -134,10 +138,10 @@ unsigned long TimeSupLast = 0 ;
 unsigned long TimeServLast = 0;
 unsigned long TimeAnalogLast = 0;
 unsigned long TimeClutchLast = 0;
-unsigned long TimeSupDelay = 200;     // 500 mSec
-unsigned long TimeServDelay = 200;    // 100 msecs 
-unsigned long TimeAnalogDelay = 100;  // 500 mSec
-unsigned long TimeClutchDelay = 100;  // 5000 = 5 Secs 100 = 100mSec
+unsigned long TimeSupDelay = 50;     // 500 mSec
+unsigned long TimeServDelay = 50;    // 100 msecs 
+unsigned long TimeAnalogDelay = 50;  // 500 mSec
+unsigned long TimeClutchDelay = 50;  // 5000 = 5 Secs 100 = 100mSec
 
 int speedvalue= 100;                // 100
 int initSpeed = 230;                // 230
@@ -647,7 +651,7 @@ void driveMotors() {
   }  //do super Outputs 
   else                   //Super Not Online       ########### Drive Motors #############
   {
-    if ((motorcontrol[0] == 1) )   // left drive output            // && ((motorcontrol[3] < (254 - maxTiller))|| (TillerStopCount 10)  )) 
+    if ((motorcontrol[0] > 0) )   // left drive output            // && ((motorcontrol[3] < (254 - maxTiller))|| (TillerStopCount 10)  )) 
    { LastClutch = 0; //start clutch after delay
       TimeClutchLast = millis(); 
     if (LastDir != 1) // changed Dir
@@ -660,7 +664,10 @@ void driveMotors() {
       {speedvalue = speedvalue + acceleration;
        if (speedvalue > maxSpeed) speedvalue = maxSpeed;
       }
-       left(speedvalue);  /* left( speed 0 - 255 ) */
+       if (motorcontrol[0] == 1) // For compatibility with older controllers
+         left(255); // Maximum speed!
+       else // Controller sets the speed of the ram
+         left(motorcontrol[0]);
 
      if (SIM_Servo) {
        if (ServoPos < 130)
@@ -672,7 +679,7 @@ void driveMotors() {
    }  // go left 
    
     else {
-      if ((motorcontrol[1] == 1) )   // right drive output             //  && ((motorcontrol[3] > (1 + maxTiller))|| (TillerStopCount <10)    ) ) 
+      if ((motorcontrol[1] > 0) )   // right drive output             //  && ((motorcontrol[3] > (1 + maxTiller))|| (TillerStopCount <10)    ) ) 
       {  LastClutch = 0; // start clutch after delay
          TimeClutchLast = millis(); 
         if (LastDir != 0) // changed Dir
@@ -685,7 +692,10 @@ void driveMotors() {
         {  speedvalue = speedvalue + acceleration;
            if (speedvalue > maxSpeed) speedvalue = maxSpeed;
         }  // go right
-        right(speedvalue);  /* right( speed 0 - 255 ) */
+        if (motorcontrol[1] == 1) // For compatibility with older controllers
+          right(255); // Maximum speed!
+        else // Controller sets the speed of the ram
+          right(motorcontrol[1]);  /* right( speed 0 - 255 ) */
       
        if (SIM_Servo) {
          if (ServoPos > 30)
@@ -739,7 +749,7 @@ void loop()          /*************** Main Loop ****************************/
 
   TimeNow = millis();
   // doCurrent();
-  if (TimeNow > (TimeAnalogLast + TimeAnalogDelay)) {//  100 mSec
+  if (TimeNow > (TimeAnalogLast + TimeAnalogDelay)) {
     readPot();
     TimeAnalogLast = millis();  // dont do another before TimeAnalogDelay passed
   }
@@ -877,7 +887,7 @@ if (TimeNow > (TimeSupLast + TimeSupDelay)) //  500 mSec
 
 
 void CallHandset() {
- if (TimeNow > (TimeServLast + TimeServDelay)) {  //  100 mSec
+ if (TimeNow > (TimeServLast + TimeServDelay)) {
 
               if (Super_Online == 0) { 
                 clearMotors();   //Clear it so next RX read needs to be valid to increase more

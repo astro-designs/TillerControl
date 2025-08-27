@@ -16,6 +16,14 @@
  * 22/07/2023 (MC)
  * Added separate constant control minimum detectable Pot position change, setting it to 2 (was 5)
  * Reduced MinTillerChange to 4
+ * 
+ * 26/08/2025 (MC
+ * Added speed control of Ram during midship & pot-controlled goto movement
+ * Required change at TillerEnd to support remote Ram speed control
+ * Moved I/O away from digital 0 & 1 to allow serial port (RX / TX) to be used.
+ * 
+ * To do...
+ * Create a #define to select between servo or NeoPixel tiller positional feedback
 */
 
 // Who built the firmware last?
@@ -38,32 +46,32 @@
 // *****************************************
 // *****            I/O Pins           *****
 
-// Which pin on the Arduino is connected to the NeoPixels?
-#define ARC_LED_PIN     4   // was 6
-#define ARC_POWER_PIN   A0  // Power for LED Arc
-
-// JoyButton Remote Control of Hydaulic Ram
-#define Button_Pin0     0   // Centre (Midship)
-#define Button_Pin1     1   // GotoPot (Pot controlled tiller)
+#define Serial_RX       0   // Serial Receive (input to Arduino)
+#define Serial_TX       1   // Serial Transmit (output from Arduino)
 #define Button_Pin2     2   // Out / PCINT3
 #define Button_Pin3     3   // In  / PCINT4
-//#define Button_Pin4   4   // Clutch  ** for later
-
-// DIP Switch
+#define Button_Pin0     4   // Centre (Midship)
 #define Switch_Pin0     5   // Dil Switch 0 on Dig IP 5 Channel Low  byte
 #define Switch_Pin1     6   // Dil Switch 1 on Dig IP 6 Channel High byte
 #define Switch_Pin2     7   // Dil Switch 2 on Dig IP 7 Supervisor Mode
-#define Force_Channel   2   // Set to 0-3 to force radio channel, set to > 7 to work from Switch 1, 2 & 3
+// CE                   8   // nRF24L01 CE
+#define ARC_LED_PIN     9   // NeoPixels PWM / Signal
+#define SERVO_PIN       9   // Tiller Position Indicator Servo (Any low-power small R/C servo, eg GS-9018 micro servo)
+// CSN                  10  // nRF24L01 CSN
+// MOSI                 11  // nRF24L01 MOSI
+// MISO                 12  // nRF24L01 MISO
+// SCK                  13  // nRF24L01 SCK
+
+// Analogue-capable I/O pins...
+#define ARC_POWER_PIN   A0  // Power for LED Arc
+#define POT_PIN         A1  // Tiller Control Pot (10k linear rotary pot)
+#define POT2_PIN        A2  // Throttle Control Pot (10k linear rotary pot)
 #define DBGLED_PIN      A3  // Debug Led for checking sleep function, battery voltage & radio status (Was 9)
+#define Button_Pin1     A4  // GotoPot (Pot controlled tiller)
+#define BatV_PIN        A5  // Battery Voltage (Senses 5V voltage through 10k/10k divider (5V => 2.5V norm))
 
-// Tiller Control Pot
-#define POT_PIN         A1  // 10k linear rotary pot
+#define Force_Channel   2   // Set to 0-3 to force radio channel, set to > 7 to work from Switch 1, 2 & 3
 
-// Tiller Position Indicator Servo
-#define SERVO_PIN       9   // Any low-power small R/C servo, eg GS-9018 micro servo
-
-// Battery Voltage sense
-#define BatV_PIN        A5  // Senses 5V voltage through 10k/10k divider (5V => 2.5V norm)
 
 // *****************************************
 // *****         Configuration         *****
@@ -85,7 +93,7 @@
 #define TBounce         50      // 50 mSec switch de-bounce time
 #define TSleepNear      30000   // 30 seconds inactivity before "Nearly time to go to sleep!" warning is given
 #define TSleep          40000   // 40 seconds inactivity before going to sleep
-#define TTillerTimeout  15000   // 15 seconds after Tiller changes position, the insructions to move the tiller will stop
+#define TTillerTimeout  15000   // 15 seconds after Tiller changes position, the instructions to move the tiller will stop
 
 #define TillerPotMode   3       // Pot mode (0 = auto L/R, 1 = left-handed, 2 = right-handed, 3 = basic)
 #define TillerPot_CCW   5       // Pot output when max CCW
@@ -104,14 +112,14 @@
 #define TillerPosCentre 70      // Output of tiller position from tiller-end when tiller is mid-ship.
 #define TillerPosMin    7       // Precautionary limit on Tiller position to prevent Ram being driven to limit
 #define TillerPosMax    120     // Precautionary limit on Tiller position to prevent Ram being driven to limit
-#define MinTillerChange 4       // Controls how sensitive the Tiller position sensor is - 5 is good, < 5 is too small (Tiller can oscillates), > 7 is too big (larger positional error)
-#define MinPotChange    2       // Controls how sensitive the Pot is to change
+#define MinTillerChange 1       // Controls how sensitive the Tiller position sensor is - 5 is good, < 5 is too small (Tiller can oscillates), > 7 is too big (larger positional error)
+#define MinPotChange    1       // Controls how sensitive the Pot is to change
 
 // *****************************************
 // ***** Debugging switches and macros *****
 
 #define OLED 0                  // turn the OLED display on or off - also runs faster with no display page refresh
-#define DEBUG 1                 // Switch debug output on and off by 1 or 0
+#define DEBUG 0                 // Switch debug output on and off by 1 or 0
 
 #if DEBUG
 #define PRINTS(s)       { Serial.print(F(s)); }
@@ -205,8 +213,10 @@ uint8_t MaxDisplayWidth = 128;
 uint8_t MaxDisplayHeight = 96;
 uint8_t wait_ok = 0;
 uint8_t wait_last = 0;
-
+int speedvalue = 0;                 // Speed of ram (0 - 255)
 uint8_t numPasses = 0;
+
+int Message = 0;
 
 int PotValue = 0;
 int ModifiedPotValue = 0;
@@ -301,12 +311,14 @@ void flashLED() {
   }
   
   PRINT("\n Battery Voltage:     ", BatteryVoltage, 3); 
-  PRINTI("\n PotValue:            ", PotValue); 
-  PRINTI("\n ModifiedPotValue:    ", ModifiedPotValue);
+  PRINTI("\n Messages received:  ", Message); 
+  //PRINTI("\n PotValue:            ", PotValue); 
+  //PRINTI("\n ModifiedPotValue:    ", ModifiedPotValue);
   PRINTI("\n PotTillerPos:        ", PotTillerPos);
-  PRINTI("\n OldPotTillerPos:     ", OldPotTillerPos);
+  //PRINTI("\n OldPotTillerPos:     ", OldPotTillerPos);
   PRINTI("\n TillerPos:           ", TillerPos); 
-  PRINTI("\n buf[3]:              ", buf[3]); 
+  PRINTI("\n Speedvalue:          ", speedvalue);
+  //PRINTI("\n buf[3]:              ", buf[3]); 
   PRINTI("\n Radio Status:        ", RX_state); 
   PRINTI("\n Time Now:            ", TimeNow);
   PRINTI("\n Time Last:           ", TimeLast);
@@ -388,30 +400,39 @@ void readJoystick(uint8_t motor[3]){
   }
   
   // Check for Tiller Pot change...
-  if (abs(PotTillerPos - OldPotTillerPos) > MinPotChange) {
-    OldPotTillerPos = PotTillerPos;
-    TimeTillerInactive = TimeNow + TTillerTimeout; // Reset Tiller Timeout
-  }
+  //if (abs(PotTillerPos - OldPotTillerPos) > MinPotChange) {
+  //  OldPotTillerPos = PotTillerPos;
+  //  TimeTillerInactive = TimeNow + TTillerTimeout; // Reset Tiller Timeout
+ // }
       
   if (!digitalRead(Button_Pin1)) { // Highest priority control - Goto Pot position
-    //PRINTS("\n Button_Pin1!");
-    if (RX_state == 3 and PotTillerPos > TillerPos + MinTillerChange and TimeNow < TimeTillerInactive) // Pot controls the Tiller
-      motor[0] = 1;
-    if (RX_state == 3 and PotTillerPos < TillerPos - MinTillerChange and TimeNow < TimeTillerInactive) // Pot controls the Tiller
-      motor[1] = 1;
+    speedvalue = abs(PotTillerPos - TillerPos) * 16;
+    if (speedvalue > 255) speedvalue = 255;
+
+    //if (RX_state == 3 and PotTillerPos > TillerPos and TimeNow < TimeTillerInactive) // Pot controls the Tiller
+    if (RX_state == 3 and PotTillerPos > TillerPos) // Pot controls the Tiller
+      { motor[0] = speedvalue;
+      motor[1] = 0; }
+    //else if (RX_state == 3 and PotTillerPos < TillerPos and TimeNow < TimeTillerInactive) // Pot controls the Tiller
+    else if (RX_state == 3 and PotTillerPos < TillerPos) // Pot controls the Tiller
+      { motor[0] = 0;
+      motor[1] = speedvalue; }
 
     // Reset standby timeout
     TimeLast = millis(); //set Timelast to current millis()
   }
   else if (!digitalRead(Button_Pin0)) { // Goto MidShip position
+    speedvalue = abs(TillerPosCentre - TillerPos) * 16;
+    if (speedvalue > 255) speedvalue = 255;
+
      //PRINTS("\n Button_Pin0!");
-     if (TillerPos < (TillerPosCentre-3)) {
-       motor[0] = 1;
+     if (TillerPos < (TillerPosCentre)) {
+       motor[0] = speedvalue;
        motor[1] = 0;
      }
-     else if (TillerPos > (TillerPosCentre+3)) {
+     else if (TillerPos > (TillerPosCentre)) {
        motor[0] = 0;
-       motor[1] = 1;
+       motor[1] = speedvalue;
      }    
 
     // Reset standby timeout
@@ -419,7 +440,7 @@ void readJoystick(uint8_t motor[3]){
   }
   else if      (!digitalRead(Button_Pin2)) { // Button or Joystick controls the Tiller
     //PRINTS("\n Button_Pin2!");
-    motor[0] = 1;
+    motor[0] = 255;
     motor[1] = 0;
 
     // Reset standby timeout
@@ -428,7 +449,7 @@ void readJoystick(uint8_t motor[3]){
   else if (!digitalRead(Button_Pin3)) { // Button or Joystick controls the Tiller
     //PRINTS("\n Button_Pin3!");
     motor[0] = 0;
-    motor[1] = 1;
+    motor[1] = 255;
 
     // Reset standby timeout
     TimeLast = millis(); //set Timelast to current millis()
@@ -690,10 +711,10 @@ void DoRadioRx(void) {
  
     uint8_t len = sizeof(buf);
     uint8_t from;
+    Message++; // Increment message counter (debug only)
     if (RadioManager.recvfromAck(buf, &len, &from))  //get message from Tiller - buf
 
-    {
-
+    {      
       if (SupervisorMode == 1) SuperAck = 1;
       
 
